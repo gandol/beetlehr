@@ -20,17 +20,19 @@ class AttendanceOverviewService
     {
         $filter_date = $request->filter_date ?: Carbon::now();
         $filter_branch = $request->filter_branch ?: 1;
-        
+
         $month = Carbon::parse($filter_date)->format('m');
         $year = Carbon::parse($filter_date)->format('Y');
         $employees = Employee::where('branch_id', $filter_branch)->get();
-        $attendances = Attendance::whereMonth('date_clock', $month)->whereYear('date_clock', $year)->whereIn('user_id', $employees->pluck('user_id'))->get();
-        $schedules = Schedule::whereIn('user_id', $employees->pluck('user_id'))->whereMonth('date', $month)->whereYear('date', $year)->get();
+        $attendances = Attendance::select("is_force_clock_out","clock_out","is_late_clock_in","is_early_clock_out","date_clock","is_late_clock_in")
+            ->whereMonth('date_clock', $month)->whereYear('date_clock', $year)->whereIn('user_id', $employees->pluck('user_id'))->get();
+        $schedules = Schedule::select("is_leave")
+        ->whereIn('user_id', $employees->pluck('user_id'))->whereMonth('date', $month)->whereYear('date', $year)->get();
         $leaves = Leave::whereIn('employee_id', $employees->pluck('id'))->where(function ($query) use ($month) {
-                    $query->whereMonth('start_date', $month)->orWhereMonth('end_date', $month);
-                })->where(function ($query) use ($year) {
-                    $query->whereYear('start_date', $year)->orWhereYear('end_date', $year);
-                })->where('status', 'approved')->get();
+            $query->whereMonth('start_date', $month)->orWhereMonth('end_date', $month);
+        })->where(function ($query) use ($year) {
+            $query->whereYear('start_date', $year)->orWhereYear('end_date', $year);
+        })->where('status', 'approved')->get();
 
         $attendance_status = new CalculateAttendanceStatus($attendances);
         $result = [
@@ -67,7 +69,7 @@ class AttendanceOverviewService
         $filter_date = $request->filter_date ?: Carbon::now();
         $filter_branch = $request->filter_branch ?: 1;
 
-        // Generate date 
+        // Generate date
         $month = Carbon::parse($filter_date)->format('m');
         $year = Carbon::parse($filter_date)->format('Y');
         $current_month = Carbon::now()->format('m');
@@ -81,9 +83,15 @@ class AttendanceOverviewService
         }
 
         // Query requirement data
-        $employees = Employee::where('branch_id', $filter_branch)->get();
-        $attendances = Attendance::with(['user_detail'])->whereMonth('date_clock', $month)->whereYear('date_clock', $year)->whereIn('user_id', $employees->pluck('user_id'))->get();
-        $schedules =  Schedule::with(['shift_detail'])->whereMonth('date', $month)->whereYear('date', $year)->whereIn('user_id', $employees->pluck('user_id'))->get();
+        $employees = Employee::where('branch_id', $filter_branch)
+            ->join('users', 'users.id', '=', 'employees.user_id')
+            ->get();
+        $attendances = Attendance::join('users', 'users.id', '=', 'attendances.user_id')
+            ->select("is_late_clock_in","is_early_clock_out","is_force_clock_out","user_id","date_clock",)
+            ->whereMonth('date_clock', $month)->whereYear('date_clock', $year)->whereIn('user_id', $employees->pluck('user_id'))->get();
+        $schedules = Schedule::join("shifts", "schedules.shift_id", "=", "shifts.id")
+            ->select("is_leave","date","user_id")
+            ->whereMonth('date', $month)->whereYear('date', $year)->whereIn('user_id', $employees->pluck('user_id'))->get();
         $leaves = Leave::where(function ($query) use ($month) {
             $query->whereMonth('start_date', $month)->orWhereMonth('end_date', $month);
         })->where(function ($query) use ($year) {
@@ -92,17 +100,22 @@ class AttendanceOverviewService
         $breaks = BreakTime::whereHas('attendance', function ($q) use ($month, $year) {
             $q->whereMonth('date_clock', $month)->whereYear('date_clock', $year);
         })->get();
-       
+
         $attendance_list = [];
         $checkStatusAttendance = new CheckStatusAttendance();
         $getFile = new GetFile();
+        $currentDate = Carbon::now()->format('Y-m-d');
 
         foreach ($employees as $employee) {
             $data = [
-                'employee_name' => $employee->user_detail->name
+                'employee_name' => $employee->name
             ];
 
             foreach ($listDate as $key => $value) {
+                if($value > $currentDate) {
+                    $data['attendances'][$key] = ['id' => null, 'status' => 'netral'];
+                    continue;
+                }
                 // Get Requirement data to get status attendance
                 $generateLeavePeriod = new GenerateLeavePeriod();
                 $leavePeriod = $generateLeavePeriod->handle(collect($leaves)->where('employee_id', $employee->id)->all());
@@ -110,14 +123,14 @@ class AttendanceOverviewService
                 $schedule = collect($schedules)->where('user_id', $employee->user_id)->where('date', $value)->first();
                 $status = $checkStatusAttendance->handle($attendance, $schedule, $leavePeriod, $value);
 
-                if($current_month === $month && $current_year === $year && $key > $current_day) {
+                if ($current_month === $month && $current_year === $year && $key > $current_day) {
                     $data['attendances'][$key] = ['id' => null, 'status' => ($status === 'leave' || $status === 'holiday') ? $status : 'netral'];
-                }else{
-                    if(in_array($status, ['unassigned', 'holiday', 'absent', 'netral', 'leave'])) {
+                } else {
+                    if (in_array($status, ['unassigned', 'holiday', 'absent', 'netral', 'leave'])) {
                         $data['attendances'][$key] = ['id' => null, 'status' => $status];
-                    }else{
+                    } else {
                         $data['attendances'][$key] = [
-                            'id' => $attendance->id, 
+                            'id' => $attendance->id,
                             'date' => Carbon::parse($attendance->date_clock)->format('d F Y'),
                             'user_name' => $attendance->user_detail->name,
                             'status' => $status,
@@ -126,7 +139,7 @@ class AttendanceOverviewService
                             'clock_in' => Carbon::parse($attendance->clock_in)->format('H:i'),
                             'clock_out' => $attendance->clock_out ? Carbon::parse($attendance->clock_out)->format('H:i') : '-',
                             'schedule_start' => isset($schedule) && $schedule->shift_detail ? $schedule->shift_detail->start_time : '-',
-                            'schedule_end' =>  isset($schedule) && $schedule->shift_detail ? $schedule->shift_detail->end_time : '-',
+                            'schedule_end' => isset($schedule) && $schedule->shift_detail ? $schedule->shift_detail->end_time : '-',
                             'total_late' => $attendance->is_late_clock_in ? $attendance->total_late_clock_in : '-',
                             'total_clock_out_early' => $attendance->is_early_clock_out ? $attendance->total_early_clock_out : '-',
                             'total_break_hours' => Time::calculateTotalHours(collect($breaks)->where('attendance_id', $attendance->id)->pluck('total_work_hours')),
@@ -134,15 +147,15 @@ class AttendanceOverviewService
                             'outside_radius_clock_in' => $attendance->is_outside_radius_clock_in ? 'Yes' : 'No',
                             'note_clock_in' => $attendance->notes_clock_in ?: '-',
                             'address_clock_in' => $attendance->address_clock_in,
-                            'map_address_clock_in' => 'https://maps.google.com/?q='.$attendance->latitude_clock_in.','.$attendance->longitude_clock_in,
-                            'clock_in_image' => $getFile->handle($attendance->image_id_clock_in)->full_path,
-                            'files_clock_in' => $getFile->handle($attendance->files_clock_in),
+                            'map_address_clock_in' => 'https://maps.google.com/?q=' . $attendance->latitude_clock_in . ',' . $attendance->longitude_clock_in,
+                            'clock_in_image' => "",
+                            'files_clock_in' => "",
                             'outside_radius_clock_out' => $attendance->is_outside_radius_clock_out ? 'Yes' : 'No',
                             'note_clock_out' => $attendance->notes_clock_out ?: '-',
                             'address_clock_out' => $attendance->address_clock_out ?: '-',
                             'map_address_clock_out' => 'https://maps.google.com/?q=' . $attendance->latitude_clock_out . ',' . $attendance->longitude_clock_out,
-                            'clock_out_image' => $attendance->image_id_clock_out ? $getFile->handle($attendance->image_id_clock_out)->full_path : '-',
-                            'files_clock_out' => $attendance->files_clock_out ? $getFile->handle($attendance->files_clock_out) : '-'
+                            'clock_out_image' => "",
+                            'files_clock_out' => ""
                         ];
                     }
                 }
@@ -160,7 +173,7 @@ class AttendanceOverviewService
         $filter_branch = $request->filter_branch ?: 1;
         $recap_lists = ['present', 'late', 'absent', 'clockout_early', 'leave', 'holiday'];
 
-        // Generate date 
+        // Generate date
         $month = Carbon::parse($filter_date)->format('m');
         $year = Carbon::parse($filter_date)->format('Y');
         $listDateByMonth = Carbon::createFromFormat('Y-m-d', $year . '-' . $month . '-' . 1);
@@ -171,9 +184,11 @@ class AttendanceOverviewService
         }
 
         // Query requirement data
-        $employees = Employee::where('branch_id', $filter_branch)->get();
-        $attendances = Attendance::whereMonth('date_clock', $month)->whereYear('date_clock', $year)->whereIn('user_id', $employees->pluck('user_id'))->get();
-        $schedules =  Schedule::whereMonth('date', $month)->whereYear('date', $year)->whereIn('user_id', $employees->pluck('user_id'))->get();
+        $employees = Employee::select("user_id","id")
+        ->where('branch_id', $filter_branch)->get();
+        $attendances = Attendance::select("date_clock")
+        ->whereMonth('date_clock', $month)->whereYear('date_clock', $year)->whereIn('user_id', $employees->pluck('user_id'))->get();
+        $schedules = Schedule::whereMonth('date', $month)->whereYear('date', $year)->whereIn('user_id', $employees->pluck('user_id'))->get();
         $leaves = Leave::where(function ($query) use ($month) {
             $query->whereMonth('start_date', $month)->orWhereMonth('end_date', $month);
         })->where(function ($query) use ($year) {
@@ -181,13 +196,21 @@ class AttendanceOverviewService
         })->where('status', 'approved')->whereIn('employee_id', $employees->pluck('id'))->get();
 
         $attendance_recaps = [];
-
+        $currentDate = Carbon::now()->format('Y-m-d');
         foreach ($recap_lists as $key => $value) {
             $data = [
                 'status' => $value
             ];
 
             foreach ($listDate as $dateKey => $dateValue) {
+//                if($dateValue > $currentDate) {
+//                    $data['recaps'][$dateKey] = ['total_recap' => 0];
+//                    continue;
+//                }
+//                if($value == 'holiday') {
+//                    $data['recaps'][$dateKey] = ['total_recap' => 0];
+//                    continue;
+//                }
                 $attendance = collect($attendances)->where('date_clock', $dateValue)->all();
                 $attendance_status = new CalculateAttendanceStatus($attendance);
 
@@ -218,7 +241,7 @@ class AttendanceOverviewService
                         $schedule = collect($schedules)->where('date', $dateValue)->all();
                         $data['recaps'][$dateKey] = ['total_recap' => $attendance_status->calculateHolidayStatus($schedule)];
                         break;
-                    
+
                     default:
                         $data['recaps'][$dateKey] = ['total_recap' => 0];
                         break;

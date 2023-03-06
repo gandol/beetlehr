@@ -9,7 +9,7 @@ class GetBranchOptions
 {
     public function handle()
     {
-        $branch = Branch::get()->pluck('name', 'id');
+        $branch = Branch::select("name","id")->get()->pluck('name', 'id');
 
         return $branch;
     }
