@@ -31,7 +31,7 @@ const openModalForm = ref(false)
 const attendanceQuery = ref([])
 const attendanceRecapQuery = ref([])
 const attendanceListHeader = ref([])
-const filterBranchValue = ref(1);
+const filterBranchValue = ref(2);
 const breadcrumb = [
     {
         name: "Dashboard",
@@ -179,7 +179,7 @@ const getAttendanceListHeader = debounce(async (page) => {
         }
     }).then((res) => {
         attendanceListHeader.value = res.data
-        getAttendanceListData()
+        // getAttendanceListData()
     }).catch((res) => {
         notify({
             type: "error",
@@ -193,13 +193,21 @@ const filterBranch = () => {
     initData()
 }
 
+async function loadData(){
+    await Promise.all({
+        attendanceOverview: getAttendanceOverviewData(),
+        attendanceListHeader: getAttendanceListHeader(),
+        attendanceList: getAttendanceListData(),
+    })
+}
+
 const initData = () => {
     overviewLoading.value = true
     attendanceListLoading.value = true
     attendanceRecapLoading.value = true
-    getAttendanceOverviewData()
-    getAttendanceListHeader()
-    getAttendanceRecapData()
+    loadData()
+    // getAttendanceOverviewData()
+    // getAttendanceListHeader()
 }
 
 const closeModalForm = () => {
@@ -294,7 +302,7 @@ onMounted(() => {
                                 <VUnassign class="my-auto mr-1" />
                                 Unassign
                             </div>
-                        </div>  
+                        </div>
                     </div>
                 </div>
             </div>
@@ -316,11 +324,11 @@ onMounted(() => {
                 </tr>
                 <tr v-for="(data, index) in attendanceQuery" :key="index" v-else>
                     <td class="px-4 whitespace-nowrap h-16 fixed-left"> {{data.employee_name}} </td>
-                    <td class="px-4 whitespace-nowrap h-16" v-for="(attendanceData, attendanceIndex) in data.attendances" :key="attendanceIndex"> 
+                    <td class="px-4 whitespace-nowrap h-16" v-for="(attendanceData, attendanceIndex) in data.attendances" :key="attendanceIndex">
                         <div v-if="attendanceData.status === 'netral'">
                             -
                         </div>
-                        <div v-else class="p-1 border-2 rounded-lg border-slate-200" 
+                        <div v-else class="p-1 border-2 rounded-lg border-slate-200"
                             :class="{'cursor-pointer': attendanceData.status === 'present' || attendanceData.status === 'late' || attendanceData.status === 'clockout_early'}">
                             <VHoliday v-if="attendanceData.status === 'holiday'"/>
                             <VPresent v-else-if="attendanceData.status === 'present'" @click="openModalForm = true, itemSelected = attendanceData"/>
@@ -335,43 +343,6 @@ onMounted(() => {
             </VDataTable>
         </section>
     </div>
-
-    <!-- Attendance Recap -->
-    <div class="bg-white shadow-lg rounded-sm mb-8">
-        <div class="flex flex-col md:flex-row md:-mr-px">
-            <div class="grow">
-                <div class="py-6 px-4">
-                    <div class="font-semibold text-xl text-slate-800">Recap </div>
-                    <div class="text-slate-500 font-medium text-sm"> {{ filter.currentMonth }} </div>
-                </div>
-            </div>
-        </div>
-        <!-- Table -->
-        <section class="py-6 px-4">
-            <div v-if="attendanceRecapLoading">
-                <VLoading />
-            </div>
-            <VDataTable :heads="attendanceListHeader" v-if="!attendanceRecapLoading" wrapperClass="!px-0"
-                :freezeTable="true">
-                <tr v-if="attendanceRecapQuery.length === 0 && !attendanceRecapLoading">
-                    <td class="overflow-hidden my-2" :colspan="attendanceListHeader.length">
-                        <div class="flex items-center flex-col w-full my-32">
-                            <VEmpty />
-                            <div class="mt-9 text-slate-500 text-xl md:text-xl font-medium">Result not
-                                found.</div>
-                        </div>
-                    </td>
-                </tr>
-                <tr v-for="(data, index) in attendanceRecapQuery" :key="index" v-else>
-                    <td class="px-4 whitespace-nowrap h-16 fixed-left capitalize"> {{data.status.replace(/_/g, ' ')}} </td>
-                    <td class="px-4 whitespace-nowrap h-16" v-for="(recapData, recapIndex) in data.recaps" :key="recapIndex">
-                        {{ recapData.total_recap }}
-                    </td>
-                </tr>
-            </VDataTable>
-        </section>
-    </div>
-    <VModalForm :data="itemSelected" :open-dialog="openModalForm" @close="closeModalForm" />
 </template>
 
 <style scoped>

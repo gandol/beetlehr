@@ -12,12 +12,9 @@ class CalculateAttendanceStatus
     public function __construct($attendances)
     {
         // Get setting related to attendance
-        $settings = Setting::whereIn('key', ['is_absent_force_clock_out'])->get(['key', 'value'])->keyBy('key')
-        ->transform(function ($setting) {
-            return $setting->value;
-        })->toArray();
-
-        $this->settings = $settings;
+        $this->settings = [
+            'is_absent_force_clock_out' => 0
+        ];
         $this->attendances = collect($attendances);
     }
 
